@@ -4,7 +4,8 @@
   AUTHOR......: David Rowe
   DATE CREATED: 4 June 2013
 
-  Two channel ADC driver module for STM32F4.
+  Two channel ADC driver module for STM32F4.  Pin PA1 connects to ADC1, pin
+  PA2 connects to ADC2.
 
 \*---------------------------------------------------------------------------*/
 
@@ -209,7 +210,7 @@ void DMA2_Stream0_IRQHandler(void) {
     short signed_buf1[ADC_BUF_SZ/2];
     short signed_buf2[ADC_BUF_SZ/2];
 
-    GPIOE->ODR = (1 << 0);
+    GPIOE->ODR |= (1 << 0);
 
     /* Half transfer interrupt */
 

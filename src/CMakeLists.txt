@@ -78,12 +78,29 @@ set(CODEBOOKSVQANSSI
     ${D}/lspvqanssi4.txt
 )
 
+set(CODEBOOKSMEL
+    ${D}/mel1.txt
+    ${D}/mel2.txt
+    ${D}/mel3.txt
+    ${D}/mel4.txt
+    ${D}/mel5.txt
+    ${D}/mel6.txt
+)
+
 set(CODEBOOKSGE ${D}/gecb.txt)
 
-# when crosscompiling import the executable targets from a file
+# when crosscompiling we need a native executable
 if(CMAKE_CROSSCOMPILING)
-    set(IMPORT_EXECUTABLES "IMPORTFILE-NOTFOUND" CACHE FILEPATH "Point to the export file from a native build")
-    include(${IMPORT_EXECUTABLES})
+    include(ExternalProject)
+    ExternalProject_Add(codec2_native
+       SOURCE_DIR ${CMAKE_SOURCE_DIR}
+       BUILD_COMMAND $(MAKE) generate_codebook
+       INSTALL_COMMAND ${CMAKE_COMMAND} -E copy src/generate_codebook ${CMAKE_CURRENT_BINARY_DIR}
+    )
+    add_executable(generate_codebook IMPORTED)
+    set_target_properties(generate_codebook PROPERTIES
+        IMPORTED_LOCATION ${CMAKE_CURRENT_BINARY_DIR}/generate_codebook)
+    add_dependencies(generate_codebook codec2_native)
 else(CMAKE_CROSSCOMPILING)
 # Build code generator binaries. These do not get installed.
     # generate_codebook
@@ -147,6 +164,13 @@ add_custom_command(
     DEPENDS generate_codebook ${CODEBOOKSVQANSSI}
 )
 
+# codebookmel.c
+add_custom_command(
+    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/codebookmel.c
+    COMMAND generate_codebook mel_cb ${CODEBOOKSMEL} > ${CMAKE_CURRENT_BINARY_DIR}/codebookmel.c
+    DEPENDS generate_codebook ${CODEBOOKSMEL}
+)
+
 # codebookge.c
 add_custom_command(
     OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/codebookge.c
@@ -165,9 +189,12 @@ set(CODEC2_SRCS
     postfilter.c
     sine.c
     codec2.c
+    cohpsk.c
     fifo.c
     fdmdv.c
+    fm.c
     kiss_fft.c
+    linreg.c
     interp.c
     lsp.c
     phase.c
@@ -180,18 +207,27 @@ set(CODEC2_SRCS
     codebookjvm.c
     codebookvqanssi.c
     codebookdt.c
+    codebookmel.c
     codebookge.c
     golay23.c
     freedv_api.c
     varicode.c
+    modem_stats.c
 )
 
 set(CODEC2_PUBLIC_HEADERS
     golay23.h
     codec2.h
     codec2_fdmdv.h
+    codec2_cohpsk.h
+    codec2_fm.h
     codec2_fifo.h
     comp.h
+    modem_stats.h
+    kiss_fft.h
+    freedv_api.h
+    varicode.h
+
 )
 
 #
@@ -223,7 +259,7 @@ target_link_libraries(fdmdv_get_test_bits ${CMAKE_REQUIRED_LIBRARIES})
 add_executable(fdmdv_mod fdmdv_mod.c fdmdv.c kiss_fft.c)
 target_link_libraries(fdmdv_mod ${CMAKE_REQUIRED_LIBRARIES})
 
-add_executable(fdmdv_demod fdmdv_demod.c fdmdv.c kiss_fft.c octave.c)
+add_executable(fdmdv_demod fdmdv_demod.c fdmdv.c kiss_fft.c octave.c modem_stats.c)
 target_link_libraries(fdmdv_demod ${CMAKE_REQUIRED_LIBRARIES})
 
 add_executable(fdmdv_put_test_bits fdmdv_put_test_bits.c fdmdv.c kiss_fft.c)
@@ -250,6 +286,24 @@ target_link_libraries(freedv_tx ${CMAKE_REQUIRED_LIBRARIES} codec2)
 add_executable(freedv_rx freedv_rx.c)
 target_link_libraries(freedv_rx ${CMAKE_REQUIRED_LIBRARIES} codec2)
 
+add_executable(fm_demod fm_demod.c fm.c)
+target_link_libraries(fm_demod ${CMAKE_REQUIRED_LIBRARIES})
+
+add_executable(cohpsk_mod cohpsk_mod.c)
+target_link_libraries(cohpsk_mod ${CMAKE_REQUIRED_LIBRARIES} codec2)
+
+add_executable(cohpsk_demod cohpsk_demod.c octave.c)
+target_link_libraries(cohpsk_demod ${CMAKE_REQUIRED_LIBRARIES} codec2)
+
+add_executable(cohpsk_get_test_bits cohpsk_get_test_bits.c)
+target_link_libraries(cohpsk_get_test_bits ${CMAKE_REQUIRED_LIBRARIES} codec2)
+
+add_executable(cohpsk_put_test_bits cohpsk_put_test_bits.c octave.c)
+target_link_libraries(cohpsk_put_test_bits ${CMAKE_REQUIRED_LIBRARIES} codec2)
+
+add_executable(cohpsk_ch cohpsk_ch.c)
+target_link_libraries(cohpsk_ch ${CMAKE_REQUIRED_LIBRARIES} codec2)
+
 install(TARGETS codec2 EXPORT codec2-config
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -269,6 +323,7 @@ install(TARGETS
     c2sim
     fdmdv_get_test_bits
     fdmdv_mod fdmdv_demod
+    fm_demod
     fdmdv_put_test_bits
     fdmdv_interleave
     insert_errors

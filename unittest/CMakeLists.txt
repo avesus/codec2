@@ -51,6 +51,12 @@ target_link_libraries(scalarlsptest codec2)
 add_executable(tfdmdv tfdmdv.c ../src/fdmdv.c ../src/kiss_fft.c ../src/octave.c)
 target_link_libraries(tfdmdv codec2)
 
+add_executable(tcohpsk tcohpsk.c ../src/cohpsk.c ../src/octave.c)
+target_link_libraries(tcohpsk codec2)
+
+add_executable(test_cohpsk_ch test_cohpsk_ch.c ../src/cohpsk.c ../src/octave.c)
+target_link_libraries(test_cohpsk_ch codec2)
+
 add_executable(t16_8 t16_8.c ../src/fdmdv.c ../src/kiss_fft.c)
 target_link_libraries(t16_8 codec2)
 

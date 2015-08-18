@@ -27,10 +27,11 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <lpc.h>
 
 #define N 160
-#define P 10
+#define P 1
 
 int main(int argc, char *argv[])
 {
@@ -51,12 +52,14 @@ int main(int argc, char *argv[])
 
   /* Open files */
 
-  if ((fin = fopen(argv[1],"rb")) == NULL) {
+  if (strcmp(argv[1], "-")  == 0) fin = stdin;
+  else if ((fin = fopen(argv[1],"rb")) == NULL) {
     printf("Error opening input file: %s\n",argv[1]);
     exit(0);
   }
 
-  if ((fres = fopen(argv[2],"wb")) == NULL) {
+  if (strcmp(argv[2], "-") == 0) fres = stdout;
+  else if ((fres = fopen(argv[2],"wb")) == NULL) {
     printf("Error opening output residual file: %s\n",argv[2]);
     exit(0);
   }
@@ -72,6 +75,8 @@ int main(int argc, char *argv[])
 
   while( (fread(buf,sizeof(short),N,fin)) == N) {
     frames++;
+    for(i=0; i<P; i++)
+      Sn[i] = Sn[i+N];
     for(i=0; i<N; i++)
       Sn[P+i] = (float)buf[i];
 
@@ -82,6 +87,9 @@ int main(int argc, char *argv[])
     for(i=0; i<N; i++)
       buf[i] = (short)res[i];
     fwrite(buf,sizeof(short),N,fres);
+
+    if (fres == stdout) fflush(stdout);
+    if (fin == stdin) fflush(stdin);
   }
 
   fclose(fin);

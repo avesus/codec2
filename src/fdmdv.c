@@ -39,6 +39,7 @@
 
 #include "fdmdv_internal.h"
 #include "codec2_fdmdv.h"
+#include "comp_prim.h"
 #include "rn.h"
 #include "rxdec_coeff.h"
 #include "test_bits.h"
@@ -54,68 +55,7 @@ static int sync_uw[] = {1,-1,1,-1,1,-1};
 #define printf gdb_stdio_printf
 #endif
 
-/*---------------------------------------------------------------------------*\
-                                                                             
-                               FUNCTIONS
-
-\*---------------------------------------------------------------------------*/
-
-static COMP cneg(COMP a)
-{
-    COMP res;
-
-    res.real = -a.real;
-    res.imag = -a.imag;
-
-    return res;
-}
-
-static COMP cconj(COMP a)
-{
-    COMP res;
-
-    res.real = a.real;
-    res.imag = -a.imag;
-
-    return res;
-}
-
-static COMP cmult(COMP a, COMP b)
-{
-    COMP res;
-
-    res.real = a.real*b.real - a.imag*b.imag;
-    res.imag = a.real*b.imag + a.imag*b.real;
-
-    return res;
-}
-
-static COMP fcmult(float a, COMP b)
-{
-    COMP res;
-
-    res.real = a*b.real;
-    res.imag = a*b.imag;
-
-    return res;
-}
-
-static COMP cadd(COMP a, COMP b)
-{
-    COMP res;
-
-    res.real = a.real + b.real;
-    res.imag = a.imag + b.imag;
-
-    return res;
-}
-
-static float cabsolute(COMP a)
-{
-    return sqrtf(powf(a.real, 2.0) + powf(a.imag, 2.0));
-}
-
-/*---------------------------------------------------------------------------*\
+/*--------------------------------------------------------------------------* \
                                                        
   FUNCTION....: fdmdv_create	     
   AUTHOR......: David Rowe			      
@@ -242,11 +182,6 @@ struct FDMDV * fdmdv_create(int Nc)
 	f->noise_est[c] = 0.0;
     }
 
-    for(i=0; i<2*FDMDV_NSPEC; i++)
-	f->fft_buf[i] = 0.0;
-    f->fft_cfg = kiss_fft_alloc (2*FDMDV_NSPEC, 0, NULL, NULL);
-    assert(f->fft_cfg != NULL);
-    
     f->sig_pwr_av = 0.0;
 
     return f;
@@ -266,7 +201,6 @@ void fdmdv_destroy(struct FDMDV *fdmdv)
 {
     assert(fdmdv != NULL);
     KISS_FFT_FREE(fdmdv->fft_pilot_cfg);
-    KISS_FFT_FREE(fdmdv->fft_cfg);
     free(fdmdv->rx_test_bits_mem);
     free(fdmdv);
 }
@@ -305,7 +239,7 @@ void fdmdv_get_test_bits(struct FDMDV *f, int tx_bits[])
 	if (f->current_test_bit > (f->ntest_bits-1))
 	    f->current_test_bit = 0;
     }
- }
+}
 
 float fdmdv_get_fsep(struct FDMDV *f)
 {
@@ -460,8 +394,8 @@ void tx_filter(COMP tx_baseband[NC+1][M], int Nc, COMP tx_symbols[], COMP tx_fil
   AUTHOR......: David Rowe			      
   DATE CREATED: 13 August 2014
 
-  Given Nc*NB bits construct M samples (1 symbol) of Nc+1 filtered
-  symbols streams.
+  Given Nc symbols construct M samples (1 symbol) of Nc+1 filtered
+  and upconverted symbols.
 
 \*---------------------------------------------------------------------------*/
 
@@ -938,29 +872,13 @@ void fdm_downconvert(COMP rx_baseband[NC+1][M+M/P], int Nc, COMP rx_fdm[], COMP 
 
     assert(nin <= (M+M/P));
 
-    /* Nc/2 tones below centre freq */
+    /* downconvert */
   
-    for (c=0; c<Nc/2; c++) 
+    for (c=0; c<Nc+1; c++) 
 	for (i=0; i<nin; i++) {
 	    phase_rx[c] = cmult(phase_rx[c], freq[c]);
 	    rx_baseband[c][i] = cmult(rx_fdm[i], cconj(phase_rx[c]));
 	}
-
-    /* Nc/2 tones above centre freq */
-
-    for (c=Nc/2; c<Nc; c++) 
-	for (i=0; i<nin; i++) {
-	    phase_rx[c] = cmult(phase_rx[c], freq[c]);
-	    rx_baseband[c][i] = cmult(rx_fdm[i], cconj(phase_rx[c]));
-	}
-
-    /* centre pilot tone  */
-
-    c = Nc;
-    for (i=0; i<nin; i++) {
-	phase_rx[c] = cmult(phase_rx[c],  freq[c]);
-	rx_baseband[c][i] = cmult(rx_fdm[i], cconj(phase_rx[c]));
-    }
 
     /* normalise digital oscilators as the magnitude can drift over time */
 
@@ -1195,7 +1113,8 @@ float rx_est_timing(COMP rx_symbols[],
 		    COMP rx_filt[NC+1][P+1], 
 		    COMP rx_filter_mem_timing[NC+1][NT*P], 
 		    float env[],
-		    int nin)	 
+		    int nin,
+                    int m)	 
 {
     int   c,i,j;
     int   adjust;
@@ -1211,7 +1130,7 @@ float rx_est_timing(COMP rx_symbols[],
       200   1 (one more rate P sample)
     */
 
-    adjust = P - nin*P/M;
+    adjust = P - nin*P/m;
     
     /* update buffer of NT rate P filtered symbols */
     
@@ -1272,7 +1191,7 @@ float rx_est_timing(COMP rx_symbols[],
         //rx_symbols[c] = rx_filter_mem_timing[c][high_sample];
     }
   	
-    return norm_rx_timing*M;
+    return norm_rx_timing*m;
 }
 
 /*---------------------------------------------------------------------------*\
@@ -1605,7 +1524,7 @@ void fdmdv_demod(struct FDMDV *fdmdv, int rx_bits[],
     down_convert_and_rx_filter(rx_filt, fdmdv->Nc, rx_fdm_filter, fdmdv->rx_fdm_mem, fdmdv->phase_rx, fdmdv->freq, 
                                fdmdv->freq_pol, *nin, M/Q);
     PROFILE_SAMPLE_AND_LOG(rx_est_timing_start, down_convert_and_rx_filter_start, "    down_convert_and_rx_filter"); 
-    fdmdv->rx_timing = rx_est_timing(rx_symbols, fdmdv->Nc, rx_filt, fdmdv->rx_filter_mem_timing, env, *nin);	 
+    fdmdv->rx_timing = rx_est_timing(rx_symbols, fdmdv->Nc, rx_filt, fdmdv->rx_filter_mem_timing, env, *nin, M);	 
     PROFILE_SAMPLE_AND_LOG(qpsk_to_bits_start, rx_est_timing_start, "    rx_est_timing"); 
     
     /* Adjust number of input samples to keep timing within bounds */
@@ -1686,19 +1605,22 @@ float calc_snr(int Nc, float sig_est[], float noise_est[])
 
 \*---------------------------------------------------------------------------*/
 
-void fdmdv_get_demod_stats(struct FDMDV *fdmdv, struct FDMDV_STATS *fdmdv_stats)
+void fdmdv_get_demod_stats(struct FDMDV *fdmdv, struct MODEM_STATS *stats)
 {
     int   c;
 
-    fdmdv_stats->Nc = fdmdv->Nc;
-    fdmdv_stats->snr_est = calc_snr(fdmdv->Nc, fdmdv->sig_est, fdmdv->noise_est);
-    fdmdv_stats->sync = fdmdv->sync;
-    fdmdv_stats->foff = fdmdv->foff;
-    fdmdv_stats->rx_timing = fdmdv->rx_timing;
-    fdmdv_stats->clock_offset = 0.0; /* TODO - implement clock offset estimation */
+    assert(fdmdv->Nc <= MODEM_STATS_NC_MAX);
 
+    stats->Nc = fdmdv->Nc;
+    stats->snr_est = calc_snr(fdmdv->Nc, fdmdv->sig_est, fdmdv->noise_est);
+    stats->sync = fdmdv->sync;
+    stats->foff = fdmdv->foff;
+    stats->rx_timing = fdmdv->rx_timing;
+    stats->clock_offset = 0.0; /* TODO - implement clock offset estimation */
+
+    stats->nr = 1;
     for(c=0; c<fdmdv->Nc+1; c++) {
-	fdmdv_stats->rx_symbols[c] = fdmdv->phase_difference[c];
+	stats->rx_symbols[0][c] = fdmdv->phase_difference[c];
     }
 }
 
@@ -1832,71 +1754,6 @@ void fdmdv_16_to_8_short(short out8k[], short in16k[], int n)
 	in16k[i] = in16k[i + n*FDMDV_OS];
 }
 
-/*---------------------------------------------------------------------------*\
-                                                       
-  FUNCTION....: fdmdv_get_rx_spectrum()	     
-  AUTHOR......: David Rowe			      
-  DATE CREATED: 9 June 2012
-
-  Returns the FDMDV_NSPEC point magnitude spectrum of the rx signal in
-  dB. The spectral samples are scaled so that 0dB is the peak, a good
-  range for plotting is 0 to -40dB.
-
-  Note only the real part of the complex input signal is used at
-  present.  A complex variable is used for input for compatability
-  with the other rx signal procesing.
-
-  Successive calls can be used to build up a waterfall or spectrogram
-  plot, by mapping the received levels to colours.
-
-  The time-frequency resolution of the spectrum can be adjusted by varying
-  FDMDV_NSPEC.  Note that a 2*FDMDV_NSPEC size FFT is reqd to get
-  FDMDV_NSPEC output points. FDMDV_NSPEC must be a power of 2.
-
-  See octave/tget_spec.m for a demo real time spectral display using
-  Octave. This demo averages the output over time to get a smoother
-  display:
-
-     av = 0.9*av + 0.1*mag_dB
-
-\*---------------------------------------------------------------------------*/
-
-void fdmdv_get_rx_spectrum(struct FDMDV *f, float mag_spec_dB[], 
-					       COMP rx_fdm[], int nin) 
-{
-    int   i,j;
-    COMP  fft_in[2*FDMDV_NSPEC];
-    COMP  fft_out[2*FDMDV_NSPEC];
-    float full_scale_dB;
-
-    /* update buffer of input samples */
-
-    for(i=0; i<2*FDMDV_NSPEC-nin; i++)
-	f->fft_buf[i] = f->fft_buf[i+nin];
-    for(j=0; j<nin; j++,i++)
-	f->fft_buf[i] = rx_fdm[j].real;
-    assert(i == 2*FDMDV_NSPEC);
-
-    /* window and FFT */
-
-    for(i=0; i<2*FDMDV_NSPEC; i++) {
-	fft_in[i].real = f->fft_buf[i] * (0.5 - 0.5*cosf((float)i*2.0*PI/(2*FDMDV_NSPEC)));
-	fft_in[i].imag = 0.0;
-    }
-
-    kiss_fft(f->fft_cfg, (kiss_fft_cpx *)fft_in, (kiss_fft_cpx *)fft_out);
-
-    /* FFT scales up a signal of level 1 FDMDV_NSPEC */
-
-    full_scale_dB = 20*log10(FDMDV_NSPEC);
-
-    /* scale and convert to dB */
-
-    for(i=0; i<FDMDV_NSPEC; i++) {
-	mag_spec_dB[i]  = 10.0*log10f(fft_out[i].real*fft_out[i].real + fft_out[i].imag*fft_out[i].imag + 1E-12);
-	mag_spec_dB[i] -= full_scale_dB;
-    }
-}
 
 /*---------------------------------------------------------------------------*\
                                                        

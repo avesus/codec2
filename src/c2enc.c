@@ -41,10 +41,12 @@ int main(int argc, char *argv[])
     FILE          *fout;
     short         *buf;
     unsigned char *bits;
-    int            nsam, nbit, nbyte, gray;
- 
+    int            nsam, nbit, nbyte, gray, softdec;
+    float         *unpacked_bits;
+    int            bit, byte,i;
+
     if (argc < 4) {
-	printf("usage: c2enc 3200|2400|1600|1400|1300|1200|450 InputRawspeechFile OutputBitFile [--natural]\n");
+	printf("usage: c2enc 3200|2400|1600|1400|1300|1200|700 InputRawspeechFile OutputBitFile [--natural] [--softdec]\n");
 	printf("e.g    c2enc 1400 ../raw/hts1a.raw hts1a.c2\n");
 	printf("e.g    c2enc 1300 ../raw/hts1a.raw hts1a.c2 --natural\n");
 	exit(1);
@@ -62,10 +64,10 @@ int main(int argc, char *argv[])
 	mode = CODEC2_MODE_1300;
     else if (strcmp(argv[1],"1200") == 0)
 	mode = CODEC2_MODE_1200;
-    else if (strcmp(argv[1],"450") == 0)
-	mode = CODEC2_MODE_450;
+    else if (strcmp(argv[1],"700") == 0)
+	mode = CODEC2_MODE_700;
     else {
-	fprintf(stderr, "Error in mode: %s.  Must be 3200, 2400, 1600, 1400, 1300, 1200 or 450\n", argv[1]);
+	fprintf(stderr, "Error in mode: %s.  Must be 3200, 2400, 1600, 1400, 1300, 1200 or 700\n", argv[1]);
 	exit(1);
     }
 
@@ -90,20 +92,45 @@ int main(int argc, char *argv[])
     nbyte = (nbit + 7) / 8;
 
     bits = (unsigned char*)malloc(nbyte*sizeof(char));
+    unpacked_bits = (float*)malloc(nbit*sizeof(float));
     
-    if (argc == 5) {
-        if (strcmp(argv[4], "--natural") == 0)
+    gray = 1;
+    softdec = 0;
+    for (i=4; i<argc; i++) {
+        if (strcmp(argv[i], "--natural") == 0) {
             gray = 0;
-        else
-            gray = 1;
-        codec2_set_natural_or_gray(codec2, gray);
+        }
+        if (strcmp(argv[i], "--softdec") == 0) {
+            softdec = 1;
+        }
     }
+    codec2_set_natural_or_gray(codec2, gray);
+    //fprintf(stderr,"gray: %d softdec: %d\n", gray, softdec);
 
     while(fread(buf, sizeof(short), nsam, fin) == (size_t)nsam) {
+
 	codec2_encode(codec2, bits, buf);
-	fwrite(bits, sizeof(char), nbyte, fout);
+
+	if (softdec) {
+            /* unpack bits, MSB first, send as soft decision float */
+
+            bit = 7; byte = 0;
+            for(i=0; i<nbit; i++) {
+                unpacked_bits[i] = 1.0 - 2.0*((bits[byte] >> bit) & 0x1);
+                bit--;
+                if (bit < 0) {
+                    bit = 7;
+                    byte++;
+                }
+            }
+            fwrite(unpacked_bits, sizeof(float), nbit, fout);
+        }
+        else
+            fwrite(bits, sizeof(char), nbyte, fout);
+
 	// if this is in a pipeline, we probably don't want the usual
         // buffering to occur
+
         if (fout == stdout) fflush(stdout);
         if (fin == stdin) fflush(stdin);
     }
@@ -112,6 +139,7 @@ int main(int argc, char *argv[])
 
     free(buf);
     free(bits);
+    free(unpacked_bits);
     fclose(fin);
     fclose(fout);
 

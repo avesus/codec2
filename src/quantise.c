@@ -65,6 +65,10 @@ int lspd_bits(int i) {
     return lsp_cbd[i].log2m;
 }
 
+int mel_bits(int i) {
+    return mel_cb[i].log2m;
+}
+
 #ifdef __EXPERIMENTAL__
 int lspdt_bits(int i) {
     return lsp_cbdt[i].log2m;
@@ -903,8 +907,8 @@ void aks_to_M2(
   float        *snr,	     /* signal to noise ratio for this frame in dB */
   int           dump,        /* true to dump sample to dump file */
   int           sim_pf,      /* true to simulate a post filter */
-  int           pf,          /* true to LPC post filter */
-  int           bass_boost,  /* enable LPC filter 0-1khz 3dB boost */
+  int           pf,          /* true to enable actual LPC post filter */
+  int           bass_boost,  /* enable LPC filter 0-1kHz 3dB boost */
   float         beta,
   float         gamma,       /* LPC post filter parameters */
   COMP          Aw[]         /* output power spectrum */
@@ -941,13 +945,19 @@ void aks_to_M2(
 
   /* Determine power spectrum P(w) = E/(A(exp(jw))^2 ------------------------*/
 
-  for(i=0; i<FFT_ENC/2; i++)
-    Pw[i].real = 1.0/(Aw[i].real*Aw[i].real + Aw[i].imag*Aw[i].imag);
+  for(i=0; i<FFT_ENC/2; i++) {
+    Pw[i].real = 1.0/(Aw[i].real*Aw[i].real + Aw[i].imag*Aw[i].imag + 1E-6);
+  }
 
   PROFILE_SAMPLE_AND_LOG(tpw, tfft, "      Pw"); 
 
   if (pf)
       lpc_post_filter(fft_fwd_cfg, Pw, ak, order, dump, beta, gamma, bass_boost, E);
+  else {
+      for(i=0; i<FFT_ENC; i++) {
+          Pw[i].real *= E;
+      }
+  }
 
   PROFILE_SAMPLE_AND_LOG(tpf, tpw, "      LPC post filter"); 
 
@@ -1299,6 +1309,74 @@ void decode_lsps_scalar(float lsp[], int indexes[], int order)
 
     for(i=0; i<order; i++)
 	lsp[i] = (PI/4000.0)*lsp_hz[i];
+}
+
+
+/*---------------------------------------------------------------------------*\
+                                                       
+  FUNCTION....: encode_mels_scalar()	     
+  AUTHOR......: David Rowe			      
+  DATE CREATED: April 2015 
+
+  Low bit rate mel coeff encoder.
+
+\*---------------------------------------------------------------------------*/
+
+void encode_mels_scalar(int indexes[], float mels[], int order)
+{
+    int    i,m;
+    float  wt[1];
+    const float * cb;
+    float se, mel_, dmel;
+    
+    /* scalar quantisers */
+
+    wt[0] = 1.0;
+    for(i=0; i<order; i++) {
+	m = mel_cb[i].m;
+	cb = mel_cb[i].cb;
+        if (i%2) {
+            /* on odd mels quantise difference */
+            mel_ = mel_cb[i-1].cb[indexes[i-1]];
+            dmel = mels[i] - mel_;
+            indexes[i] = quantise(cb, &dmel, wt, 1, m, &se);
+            //printf("%d mel: %f mel_: %f dmel: %f index: %d\n", i, mels[i], mel_, dmel, indexes[i]);
+        }
+        else {
+            indexes[i] = quantise(cb, &mels[i], wt, 1, m, &se);
+            //printf("%d mel: %f dmel: %f index: %d\n", i, mels[i], 0.0, indexes[i]);
+        }
+
+    }
+}
+
+
+/*---------------------------------------------------------------------------*\
+                                                       
+  FUNCTION....: decode_mels_scalar()	     
+  AUTHOR......: David Rowe			      
+  DATE CREATED: April 2015 
+
+  From a vector of quantised mel indexes, returns the quantised
+  (floating point) mels.
+
+\*---------------------------------------------------------------------------*/
+
+void decode_mels_scalar(float mels[], int indexes[], int order)
+{
+    int    i;
+    const float * cb;
+
+    for(i=0; i<order; i++) {
+	cb = mel_cb[i].cb;
+        if (i%2) {
+            /* on odd mels quantise difference */
+            mels[i] = mels[i-1] + cb[indexes[i]];
+        }
+        else
+            mels[i] = cb[indexes[i]];
+    }
+
 }
 
 

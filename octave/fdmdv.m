@@ -8,13 +8,14 @@
 % Version 2
 %
 
-% reqd to mak sure we get same random bits at mod and demod
+% reqd to make sure we get same random bits at mod and demod
 
 rand('state',1); 
 randn('state',1);
 
 % Constants
 
+if 0
 global Fs = 8000;      % sample rate in Hz
 global T  = 1/Fs;      % sample period in seconds
 global Rs;
@@ -58,6 +59,7 @@ global Nrxdec;
        Nrxdec=31;
 global rxdec_coeff;
        rxdec_coeff = fir1(Nrxdec-1, 0.25);
+end
 if 0
   % tmp code to plot freq resp.  20dB attn of any aliases should be fine
   % not real sensitive to in-band attn, e.g. outer tones a dB down should be OK
@@ -165,21 +167,21 @@ function tx_symbols = bits_to_psk(prev_tx_symbols, tx_bits)
 endfunction
 
 
-% Given Nc*Nb bits construct M samples (1 symbol) of Nc filtered
+% Given Nc symbols construct M samples (1 symbol) of Nc filtered
 % symbols streams
 
-function tx_baseband = tx_filter(tx_symbols)
-  global Nc;
-  global M;
-  global tx_filter_memory;
-  global Nfilter;
-  global gt_alpha5_root;
+function [tx_baseband fdmdv] = tx_filter(fdmdv, tx_symbols)
+  Nc = fdmdv.Nc;
+  M = fdmdv.M;
+  tx_filter_memory = fdmdv.tx_filter_memory;
+  Nfilter = fdmdv.Nfilter;
+  gt_alpha5_root = fdmdv.gt_alpha5_root;
 
   tx_baseband = zeros(Nc+1,M);
 
   % tx filter each symbol, generate M filtered output samples for each symbol.
   % Efficient polyphase filter techniques used as tx_filter_memory is sparse
-
+  
   tx_filter_memory(:,Nfilter) = sqrt(2)/2*tx_symbols;
 
   for i=1:M
@@ -188,6 +190,7 @@ function tx_baseband = tx_filter(tx_symbols)
   tx_filter_memory(:,1:Nfilter-M) = tx_filter_memory(:,M+1:Nfilter);
   tx_filter_memory(:,Nfilter-M+1:Nfilter) = zeros(Nc+1,M);
 
+  fdmdv.tx_filter_memory = tx_filter_memory;
 endfunction
 
 
@@ -195,19 +198,19 @@ endfunction
 % stream.  Returns complex signal so we can apply frequency offsets
 % easily.
 
-function tx_fdm = fdm_upconvert(tx_filt)
-  global Fs;
-  global M;
-  global Nc;
-  global Fsep;
-  global phase_tx;
-  global freq;
-  global fbb_rect;
-  global fbb_phase_tx;
+function [tx_fdm fdmdv] = fdm_upconvert(fdmdv, tx_filt)
+  Fs = fdmdv.Fs;
+  M = fdmdv.M;
+  Nc = fdmdv.Nc;
+  Fsep = fdmdv.Fsep;
+  phase_tx = fdmdv.phase_tx;
+  freq = fdmdv.freq;
+  fbb_rect = fdmdv.fbb_rect;
+  fbb_phase_tx = fdmdv.fbb_phase_tx;
 
   tx_fdm = zeros(1,M);
 
-  % Nc/2 tones below zero
+  % Nc+1 tones
   
   for c=1:Nc+1
       for i=1:M
@@ -239,59 +242,47 @@ function tx_fdm = fdm_upconvert(tx_filt)
   mag = abs(fbb_phase_tx);
   fbb_phase_tx /= mag;
 
+  fdmdv.fbb_phase_tx = fbb_phase_tx;
+  fdmdv.phase_tx = phase_tx;
 endfunction
 
 
 % Frequency shift each modem carrier down to Nc+1 baseband signals
 
-function rx_baseband = fdm_downconvert(rx_fdm, nin)
-  global Fs;
-  global M;
-  global Nc;
-  global Fsep;
-  global phase_rx;
-  global freq;
+function [rx_baseband fdmdv] = fdm_downconvert(fdmdv, rx_fdm, nin)
+  Fs = fdmdv.Fs;
+  M = fdmdv.M;
+  Nc = fdmdv.Nc;
+  phase_rx = fdmdv.phase_rx;
+  freq = fdmdv.freq;
 
-  rx_baseband = zeros(1,nin);
-
-  % Nc/2 tones below centre freq
+  rx_baseband = zeros(Nc+1,nin);
   
-  for c=1:Nc/2
+  for c=1:Nc+1
       for i=1:nin
         phase_rx(c) = phase_rx(c) * freq(c);
 	rx_baseband(c,i) = rx_fdm(i)*phase_rx(c)';
       end
   end
 
-  % Nc/2 tones above centre freq  
-
-  for c=Nc/2+1:Nc
-      for i=1:nin
-        phase_rx(c) = phase_rx(c) * freq(c);
-	rx_baseband(c,i) = rx_fdm(i)*phase_rx(c)';
-      end
+  for c=1:Nc+1
+    mag = abs(phase_rx(c));
+    phase_rx(c) /= mag;
   end
 
-  % Pilot
-
-  c = Nc+1;
-  for i=1:nin
-    phase_rx(c) = phase_rx(c) * freq(c);
-    rx_baseband(c,i) = rx_fdm(i)*phase_rx(c)';
-  end
-
+  fdmdv.phase_rx = phase_rx;
 endfunction
 
 
 % Receive filter each baseband signal at oversample rate P
 
-function rx_filt = rx_filter(rx_baseband, nin)
-  global Nc;
-  global M;
-  global P;
-  global rx_filter_memory;
-  global Nfilter;
-  global gt_alpha5_root;
+function [rx_filt fdmdv] = rx_filter(fdmdv, rx_baseband, nin)
+  Nc = fdmdv.Nc;
+  M = fdmdv.M;
+  P = fdmdv.P;
+  rx_filter_memory = fdmdv.rx_filter_memory;
+  Nfilter = fdmdv.Nfilter;
+  gt_alpha5_root = fdmdv.gt_alpha5_root;
 
   rx_filt = zeros(Nc+1,nin*P/M);
 
@@ -306,16 +297,18 @@ function rx_filt = rx_filter(rx_baseband, nin)
     rx_filter_memory(:,1:Nfilter-N) = rx_filter_memory(:,1+N:Nfilter);
     j+=1;
   end
+
+  fdmdv.rx_filter_memory = rx_filter_memory;
 endfunction
 
 
 % LP filter +/- 1000 Hz, allows us to perfrom rx filtering at a lower rate saving CPU
 
-function rx_fdm_filter = rxdec_filter(rx_fdm, nin)
-  global M;
-  global Nrxdec;
-  global rxdec_coeff;
-  global rxdec_lpf_mem;
+function [rx_fdm_filter fdmdv] = rxdec_filter(fdmdv, rx_fdm, nin)
+  M = fdmdv.M;
+  Nrxdec = fdmdv.Nrxdec;
+  rxdec_coeff = fdmdv.rxdec_coeff;
+  rxdec_lpf_mem = fdmdv.rxdec_lpf_mem;
  
   rxdec_lpf_mem(1:Nrxdec-1+M-nin) = rxdec_lpf_mem(nin+1:Nrxdec-1+M);
   rxdec_lpf_mem(Nrxdec-1+M-nin+1:Nrxdec-1+M) = rx_fdm(1:nin);
@@ -324,6 +317,8 @@ function rx_fdm_filter = rxdec_filter(rx_fdm, nin)
   for i=1:nin
     rx_fdm_filter(i) = rxdec_lpf_mem(i:Nrxdec-1+i) * rxdec_coeff;
   end
+
+  fdmdv.rxdec_lpf_mem = rxdec_lpf_mem;
 end
 
 
@@ -331,17 +326,17 @@ end
 % TODO: Decimate mem update and downconversion, this will save some more CPU and memory
 %       note phase would have to advance 4 times as fast
 
-function rx_filt = down_convert_and_rx_filter(rx_fdm, nin, dec_rate)
-  global Nc;
-  global M;
-  global P;
-  global rx_fdm_mem;
-  global phase_rx;
-  global freq;
-  global freq_pol;
-  global Nfilter;
-  global gt_alpha5_root;
-  global Q;
+function [rx_filt fdmdv] = down_convert_and_rx_filter(fdmdv, rx_fdm, nin, dec_rate)
+  Nc = fdmdv.Nc;
+  M = fdmdv.M;
+  P = fdmdv.P;
+  rx_fdm_mem = fdmdv.rx_fdm_mem;
+  phase_rx = fdmdv.phase_rx;
+  freq = fdmdv.freq;
+  freq_pol = fdmdv.freq_pol;
+  Nfilter = fdmdv.Nfilter;
+  gt_alpha5_root = fdmdv.gt_alpha5_root;
+  Q = fdmdv.Q;
 
   % update memory of rx_fdm
 
@@ -386,6 +381,9 @@ function rx_filt = down_convert_and_rx_filter(rx_fdm, nin, dec_rate)
        k+=1;
      end
   end
+
+  fdmdv.phase_rx   = phase_rx;
+  fdmdv.rx_fdm_mem = rx_fdm_mem;
 endfunction
 
 
@@ -476,15 +474,14 @@ endfunction
 
 % Estimate optimum timing offset, re-filter receive symbols
 
-function [rx_symbols rx_timing_M env] = rx_est_timing(rx_filt, nin)
-  global M;
-  global Nt;
-  global Nc;
-  global rx_filter_mem_timing;
-  global P;
-  global Nfilter;
-  global Nfiltertiming;
-  global gt_alpha5_root;
+function [rx_symbols rx_timing_M env fdmdv] = rx_est_timing(fdmdv, rx_filt, nin)
+  M = fdmdv.M;
+  Nt = fdmdv.Nt;
+  Nc = fdmdv.Nc;
+  rx_filter_mem_timing = fdmdv.rx_filter_mem_timing;
+  P = fdmdv.P;
+  Nfilter = fdmdv.Nfilter;
+  Nfiltertiming = fdmdv.Nfiltertiming;
 
   % nin  adjust 
   % --------------------------------
@@ -534,6 +531,8 @@ function [rx_symbols rx_timing_M env] = rx_est_timing(rx_filt, nin)
   % rx_symbols = rx_filter_mem_timing(:,high_sample+1);
 
   rx_timing_M = norm_rx_timing*M;
+
+  fdmdv.rx_filter_mem_timing = rx_filter_mem_timing;
 endfunction
 
 
@@ -891,7 +890,8 @@ function [pilot prev_pilot pilot_lut_index prev_pilot_lut_index] = get_pilot(pil
   end
 endfunction
 
-
+if 0
+% want to use Octave resample function!
 
 % Change the sample rate by a small amount, for example 1000ppm (ratio
 % = 1.001).  Always returns nout samples in buf_out, but uses a
@@ -929,7 +929,7 @@ function [buf_out t nin] = resample(buf_in, t, ratio, nout)
   t -= delta;
 
 endfunction
-
+end
 
 % freq offset state machine.  Moves between acquire and track states based
 % on BPSK pilot sequence.  Freq offset estimator occasionally makes mistakes
@@ -1004,6 +1004,22 @@ function [sync reliable_sync_bit state timer sync_mem] = freq_state(sync_bit, st
 endfunction
 
 
+% complex freq shifting helper function
+
+function [out phase] = freq_shift(in, freqHz, Fs, phase)
+  freq_rect = exp(j*2*pi*freqHz/Fs);
+
+  out = zeros(1, length(in));
+  for r=1:length(in)
+    phase *= freq_rect;
+    out(r) = in(r)*phase;
+  end
+
+  mag = abs(phase);
+  phase /= mag;
+endfunction
+
+
 % Save test bits to a text file in the form of a C array
 
 function test_bits_file(filename)
@@ -1023,9 +1039,8 @@ endfunction
 
 % Saves RN filter coeffs to a text file in the form of a C array
 
-function rn_file(filename)
-  global gt_alpha5_root;
-  global Nfilter;
+function rn_file(gt_alpha5_root, filename)
+  Nfilter = length(gt_alpha5_root);
 
   f=fopen(filename,"wt");
   fprintf(f,"/* Generated by rn_file() Octave function */\n\n");
@@ -1121,7 +1136,7 @@ function dump_bits(rx_bits)
 
 endfunction
 
-
+if 0
 % Initialise ----------------------------------------------------
 
 global pilot_bit;
@@ -1241,3 +1256,4 @@ global prev_phase_offsets;
 prev_phase_offsets = zeros(Nc+1, 1);
 global phase_amb;
 phase_amb = zeros(Nc+1, 1);
+end
